@@ -8,12 +8,12 @@ def register(ctx) -> None:
         from service import TOOLSET, Deps, list_events, read_event, utc_now
 
     def _deps():
-        import os
+        from agent.secret_scope import get_secret
 
         return Deps(
-            url=os.environ.get("CALDAV_URL", ""),
-            user=os.environ.get("CALDAV_USER", ""),
-            password=os.environ.get("CALDAV_PASSWORD", ""),
+            url=get_secret("CALDAV_URL") or "",
+            user=get_secret("CALDAV_USER") or "",
+            password=get_secret("CALDAV_PASSWORD") or "",
             now=utc_now,
         )
 

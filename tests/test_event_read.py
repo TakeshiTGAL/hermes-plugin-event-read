@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
+import re
+import socket
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 import client
 import service
@@ -788,3 +793,159 @@ def test_short_declared_body_is_not_a_whole_calendar():
     else:
         raise AssertionError("a prefix plus trailing bytes was a calendar")
     assert client.parse_multistatus(prefix) == []
+
+
+_RANGED = {"start": "20261008T000000Z", "end": "20261009T000000Z"}
+_ENV_READ = re.compile(
+    r"""os\s*\.\s*(?:getenv\s*\(|environ\s*\.\s*get\s*\(|environ\s*\[\s*)\s*['\"](?:CALDAV_URL|CALDAV_USER|CALDAV_PASSWORD)['\"]"""
+)
+
+
+def _list_handler():
+    # A file named __init__.py is a package unless search locations are cleared.
+    # The flat import is the same _deps() the package path calls, and it uses
+    # the service module this test patches.
+    spec = importlib.util.spec_from_file_location("event_read_scope_entry", ROOT / "__init__.py")
+    spec.submodule_search_locations = None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    found = {}
+
+    class Ctx:
+        def register_tool(self, **kwargs):
+            found[kwargs["name"]] = kwargs["handler"]
+
+    mod.register(Ctx())
+    return found["list_events"]
+
+
+def _release_scope(scope, token):
+    if token is not None:
+        try:
+            scope.reset_secret_scope(token)
+        except ValueError:
+            pass
+    scope.set_secret_scope(None)
+    scope.set_multiplex_active(False)
+
+
+def test_scope_value_is_used_when_environ_differs(monkeypatch):
+    scope = pytest.importorskip("agent.secret_scope")
+    monkeypatch.setenv("CALDAV_URL", "http://env.example/cal/")
+    monkeypatch.setenv("CALDAV_USER", "env-user")
+    monkeypatch.setenv("CALDAV_PASSWORD", "env-pass-value")
+    calls = []
+
+    def transport(url, user, password, data):
+        calls.append((url, user, password))
+        return 207, _multi([])
+
+    monkeypatch.setattr(service, "exchange", transport)
+    handler = _list_handler()
+    token = scope.set_secret_scope({
+        "CALDAV_URL": "http://scope.example/cal/",
+        "CALDAV_USER": "scope-user",
+        "CALDAV_PASSWORD": "scope-pass-value",
+    })
+    try:
+        handler(_RANGED)
+        assert calls == [("http://scope.example/cal/", "scope-user", "scope-pass-value")]
+        scope.reset_secret_scope(token)
+        token = scope.set_secret_scope({
+            "CALDAV_URL": "http://scope-two.example/cal/",
+            "CALDAV_USER": "scope-user-two",
+            "CALDAV_PASSWORD": "scope-pass-two",
+        })
+        handler(_RANGED)
+        assert calls[-1] == ("http://scope-two.example/cal/", "scope-user-two", "scope-pass-two")
+    finally:
+        _release_scope(scope, token)
+
+
+def test_multiplex_scope_miss_does_not_read_environ(monkeypatch):
+    scope = pytest.importorskip("agent.secret_scope")
+    monkeypatch.setenv("CALDAV_URL", "http://env.example/cal/")
+    monkeypatch.setenv("CALDAV_USER", "env-user")
+    monkeypatch.setenv("CALDAV_PASSWORD", "env-pass-value")
+    calls = []
+
+    def transport(url, user, password, data):
+        calls.append((url, user, password))
+        raise AssertionError("upstream was called")
+
+    monkeypatch.setattr(service, "exchange", transport)
+    handler = _list_handler()
+    scope.set_multiplex_active(True)
+    token = scope.set_secret_scope({"UNRELATED": "present"})
+    try:
+        raw = handler(_RANGED)
+    finally:
+        _release_scope(scope, token)
+    body = json.loads(raw)
+    assert body["ok"] is False and body["error"] == "bad_config"
+    assert calls == []
+    assert "env.example" not in raw
+    assert "env-pass-value" not in raw
+
+
+def test_unscoped_multiplex_raises_and_does_not_call_upstream(monkeypatch):
+    scope = pytest.importorskip("agent.secret_scope")
+    monkeypatch.setenv("CALDAV_URL", "http://env.example/cal/")
+    monkeypatch.setenv("CALDAV_USER", "env-user")
+    monkeypatch.setenv("CALDAV_PASSWORD", "env-pass-value")
+    calls = []
+
+    def transport(url, user, password, data):
+        calls.append((url, user, password))
+        raise AssertionError("upstream was called")
+
+    monkeypatch.setattr(service, "exchange", transport)
+    handler = _list_handler()
+    scope.set_multiplex_active(True)
+    token = scope.set_secret_scope(None)
+    try:
+        with pytest.raises(scope.UnscopedSecretError):
+            handler(_RANGED)
+    finally:
+        _release_scope(scope, token)
+    assert calls == []
+
+
+def test_plugin_code_does_not_read_caldav_from_environ():
+    for path in sorted(ROOT.glob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        assert _ENV_READ.search(text) is None, path.name
+
+
+def test_opener_ignores_https_proxy(monkeypatch):
+    passed = []
+    real_build = urllib.request.build_opener
+
+    def spy(*handlers):
+        passed.append(handlers)
+        return real_build(*handlers)
+
+    monkeypatch.setattr(client.urllib.request, "build_opener", spy)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.test:8443")
+    monkeypatch.setenv("https_proxy", "http://proxy.test:8443")
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.test:8443")
+    monkeypatch.setenv("http_proxy", "http://proxy.test:8443")
+    targets = []
+
+    def blocked(address, *args, **kwargs):
+        targets.append(address)
+        raise OSError("blocked")
+
+    monkeypatch.setattr(socket, "create_connection", blocked)
+    try:
+        client.exchange("https://calendar.test/cal/", USER, PASSWORD, b"<c/>")
+    except client.EventError as error:
+        assert error.kind == "network"
+    else:
+        raise AssertionError("exchange connected")
+    proxies = [handler for handler in passed[0] if isinstance(handler, urllib.request.ProxyHandler)]
+    assert len(proxies) == 1 and proxies[0].proxies == {}
+    assert targets
+    hosts = [item[0] if isinstance(item, tuple) else item for item in targets]
+    assert hosts[0] == "calendar.test"
+    assert "proxy.test" not in hosts

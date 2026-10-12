@@ -8,7 +8,7 @@ Disclosure — sends CALDAV_USER and CALDAV_PASSWORD as Basic to your CALDAV_URL
 
 `CALDAV_URL` is one http or https collection URL. It needs a host and a non-empty path. A path of `/` alone is accepted. A username in the URL, a query, a fragment, an empty path, or surrounding spaces is rejected before a connection. `CALDAV_USER` and `CALDAV_PASSWORD` are sent as Basic on every request. A carriage return or line feed in either is rejected before a request. The password is not written into the result, the error text, or a saved file.
 
-Over plain http the password is sent unencrypted. Responses 301, 302, 303, 307, and 308 are not followed, including when they stay on the same host. Authorization is not sent to a second URL. http is not silently rewritten to https.
+Over plain http the password is sent unencrypted. Responses 301, 302, 303, 307, and 308 are not followed, including when they stay on the same host. Authorization is not sent to a second URL. A proxy set in the environment is not used, so the password is not sent to it. http is not silently rewritten to https.
 
 A request gives up after 20 seconds without data from the server. That is a per-request limit, not a deadline for the whole call. There is no overall deadline and no retry, so one call is one request that either answers or fails.
 

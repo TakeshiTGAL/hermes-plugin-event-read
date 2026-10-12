@@ -168,7 +168,9 @@ def _read_limited(response: Any, limit: int) -> bytes:
 def exchange(url: str, user: str, password: str, body: bytes, timeout: float = TIMEOUT_SECONDS) -> tuple[int, bytes]:
     """Send one REPORT. A 3xx raises HTTPError from _NoRedirect and is not retried here."""
     request = urllib.request.Request(url, data=body, headers=_headers(user, password), method="REPORT")
-    opener = urllib.request.build_opener(_NoRedirect)
+    # ProxyHandler({}) replaces urllib's default, so an environment proxy does not
+    # receive the Basic Authorization header. _NoRedirect replaces the redirect handler.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
     try:
         with opener.open(request, timeout=timeout) as response:
             return int(response.status), _read_limited(response, MAX_BODY)
