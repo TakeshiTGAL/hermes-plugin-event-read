@@ -422,18 +422,23 @@ def test_host_and_unjudgeable(tmp_path, monkeypatch):
     # deps.cron overrides the env judge, so call the real judge path.
     deps = _deps(tmp_path, sink)
     deps.cron = None
-    blocked = json.loads(service.list_events(deps, {}))
-    assert sink.calls == [] and blocked["error"] == "cannot_monitor" and blocked["notify"] is True
-    assert "cannot monitor" in blocked["message"] and "Nothing new" not in blocked["message"]
+    hosted = json.loads(service.list_events(deps, {}))
+    assert len(sink.calls) == 1 and hosted["ok"] is True and hosted["recorded"] is False
+    assert hosted["events"][0]["uid"] == "a" and hosted["notify"] is False
+    assert not _seen(tmp_path).exists() and not _notices(tmp_path).exists()
     monkeypatch.setenv(service.HOST_PROCESS_ENV, "0")
+    sink.calls.clear()
     monkeypatch.setattr(service, "_load_cron_flag", lambda: (_ for _ in ()).throw(ImportError("hidden")))
     hidden = json.loads(service.list_events(deps, {}))
-    assert sink.calls == [] and hidden["error"] == "cannot_monitor"
+    assert len(sink.calls) == 1 and hidden["ok"] is True and hidden["recorded"] is False
+    assert hidden["events"][0]["uid"] == "a" and not _seen(tmp_path).exists()
+    sink.calls.clear()
     monkeypatch.setattr(service, "_load_cron_flag", lambda: "yes")
     weird = json.loads(service.list_events(deps, {}))
-    assert weird["error"] == "cannot_monitor"
+    assert weird["ok"] is True and weird["recorded"] is False and weird["events"][0]["uid"] == "a"
     monkeypatch.delenv(service.HOST_PROCESS_ENV, raising=False)
     monkeypatch.setattr(service, "_load_cron_flag", lambda: False)
+    sink.calls.clear()
     sink.body = _multi([_ics("a")])
     manual = json.loads(service.list_events(deps, {}))
     assert len(sink.calls) == 1 and manual["recorded"] is False
@@ -525,10 +530,11 @@ def test_url_change_guard_and_profile(tmp_path, monkeypatch):
     assert sink.calls == [] and blocked["error"] == "not_saved"
     assert "stays quiet" not in blocked["next_step"]
     assert not _seen(tmp_path).exists()
-    monkeypatch.setattr(service, "active_profile_name", lambda: "work")
-    assert service.hermes_line("cron remove <id>") == "hermes -p work cron remove <id>"
-    monkeypatch.setattr(service, "active_profile_name", lambda: "default")
-    assert service.hermes_line("cron remove <id>") == "hermes cron remove <id>"
+    assert service.hermes_line("cron remove <id>", "work") == "hermes -p work cron remove <id>"
+    assert service.hermes_line("cron remove <id>", "default") == "hermes cron remove <id>"
+    assert service.hermes_line("cron remove <id>", "../x") == "hermes cron remove <id>"
+    assert "hermes_cli.profiles" not in (ROOT / "service.py").read_text(encoding="utf-8")
+    assert "get_active_profile_name" not in (ROOT / "service.py").read_text(encoding="utf-8")
     assert "-p" not in (ROOT / "__init__.py").read_text(encoding="utf-8") or True
     joined = "\n".join(path.read_text(encoding="utf-8") for path in ROOT.glob("*.py"))
     assert "add_argument(\"-p\"" not in joined and "add_argument('--profile'" not in joined
@@ -638,16 +644,16 @@ def test_blocked_watch_is_announced_on_the_same_cadence(tmp_path, monkeypatch):
     deps = _deps(tmp_path, sink, cron=True, now=lambda: clock["now"])
     deps.cron = lambda: None
     first = json.loads(service.list_events(deps, {}))
-    assert first["error"] == "cannot_monitor" and first["notify"] is True
-    assert "stays quiet" not in first["next_step"]
-    assert sink.calls == [] and not _seen(tmp_path).exists() and not _notices(tmp_path).exists()
+    assert first["ok"] is True and first["recorded"] is False and first["events"][0]["uid"] == "a"
+    assert first["notify"] is False and "stays quiet" not in first["next_step"]
+    assert len(sink.calls) == 1 and not _seen(tmp_path).exists() and not _notices(tmp_path).exists()
     clock["now"] = NOW + timedelta(hours=1)
     second = json.loads(service.list_events(deps, {}))
-    assert second["error"] == "cannot_monitor" and second["notify"] is True
-    assert second["message"] == service.CANNOT_MONITOR
-    assert not _notices(tmp_path).exists()
+    assert second["ok"] is True and second["recorded"] is False and second["notify"] is False
+    assert not _seen(tmp_path).exists() and not _notices(tmp_path).exists()
     clock["now"] = NOW + timedelta(hours=23)
-    assert json.loads(service.list_events(deps, {}))["notify"] is True
+    later = json.loads(service.list_events(deps, {}))
+    assert later["recorded"] is False and later["notify"] is False and not _seen(tmp_path).exists()
     # Missing settings on a watch turn are announced on the same cadence.
     empty = _deps(tmp_path, sink, cron=True, now=lambda: clock["now"], url="")
     changed = _call(empty)

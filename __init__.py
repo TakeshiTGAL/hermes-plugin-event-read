@@ -3,9 +3,11 @@
 
 def register(ctx) -> None:
     if __package__:
-        from .service import TOOLSET, Deps, list_events, read_event, utc_now
+        from .service import TOOLSET, Deps, clean_profile, list_events, read_event, utc_now
     else:
-        from service import TOOLSET, Deps, list_events, read_event, utc_now
+        from service import TOOLSET, Deps, clean_profile, list_events, read_event, utc_now
+
+    profile = clean_profile(getattr(ctx, "profile_name", None))
 
     def _deps():
         from agent.secret_scope import get_secret
@@ -15,6 +17,7 @@ def register(ctx) -> None:
             user=get_secret("CALDAV_USER") or "",
             password=get_secret("CALDAV_PASSWORD") or "",
             now=utc_now,
+            profile=profile,
         )
 
     def _list(args, **_kwargs):
@@ -38,7 +41,8 @@ def register(ctx) -> None:
                 "The first success announces nothing. Later runs announce a uid that is in the window "
                 "and was not saved before, which includes an event that moved into the window, "
                 "and a saved uid is not announced again. When the run cannot be judged as cron, "
-                "a no-argument call says it cannot monitor and does not change the saved uids. "
+                "including under plugins.isolation: host, a no-argument call still returns the next "
+                "7 days and does not change the saved uids. "
                 "A manual call does not change them. This tool does not create, edit, or delete events, "
                 "and it does not take a delivery target. "
                 'Each row is one iCalendar VEVENT, for a request such as "my calendar appointments".'

@@ -42,7 +42,6 @@ MAX_SEEN = 5_000
 QUIET = timedelta(hours=23)
 _PROFILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 READ_ERROR = "The calendar could not be read. The seen uids were not changed."
-CANNOT_MONITOR = "This process cannot monitor the calendar. The seen uids were not changed."
 DID_NOT_UPDATE = "This call did not update the seen uids."
 LIST_ARGS = (
     "list_events takes a start and an end together, or no arguments, "
@@ -88,27 +87,23 @@ class Deps:
     cron: CronJudge | None = None
     data_dir: DataDir | None = None
     write_guard: WriteGuard | None = None
+    profile: str = "default"
 
 
 def dumps(body: dict[str, Any]) -> str:
     return json.dumps(body, ensure_ascii=True, sort_keys=True)
 
 
-def active_profile_name() -> str:
-    try:
-        from hermes_cli.profiles import get_active_profile_name
-
-        name = get_active_profile_name()
-    except Exception:
-        return "default"
+def clean_profile(name: object) -> str:
+    """Profile name captured from ctx.profile_name. An unusable value is default."""
     if not isinstance(name, str) or not _PROFILE_NAME.fullmatch(name.strip()):
         return "default"
     return name.strip() or "default"
 
 
-def hermes_line(command: str) -> str:
+def hermes_line(command: str, profile: str = "default") -> str:
     """Printed hermes command. -p goes before the subcommand. This plugin does not define -p."""
-    name = active_profile_name()
+    name = clean_profile(profile)
     if name != "default":
         return f"hermes -p {name} {command}"
     return f"hermes {command}"
@@ -495,7 +490,7 @@ def _finish_watch(
         announced=announced_out,
         notify=notify,
         message=message,
-        next_step=f"The job stays until you run {hermes_line('cron remove <id>')}.",
+        next_step=f"The job stays until you run {hermes_line('cron remove <id>', deps.profile)}.",
     )
 
 
@@ -566,16 +561,10 @@ def list_events(deps: Deps, args: dict[str, Any] | None) -> str:
     directory: Path | None = None
     if not ranged:
         cron_flag = (deps.cron or judge_cron)()
-        directory = _watch_dir(deps)
-        if cron_flag is None:
-            return _watch_problem(
-                deps,
-                directory,
-                "cannot_monitor",
-                CANNOT_MONITOR,
-                "Run the watch from a cron turn in this process. The saved uids were not changed.",
-                remember=False,
-            )
+        # A confirmed cron turn records uids. An unjudgeable run, including
+        # plugins.isolation: host, still reads the seven-day window below.
+        if cron_flag is True:
+            directory = _watch_dir(deps)
     watching = (not ranged) and cron_flag is True
     problem = _config_problem(deps)
     if problem:

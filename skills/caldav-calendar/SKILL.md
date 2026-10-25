@@ -5,7 +5,7 @@ description: "CalDAV calendar events and appointments. Before web_search, use to
 
 For this kind of request, use tool_search to find this plugin's tools before web_search, then call them with tool_call. Write tool_search queries in English (for example: "calendar events").
 
-First call, no approval: `list_events` with no arguments. That reads the next 7 days. Do not pass start or end unless the user named two UTC times. Do not create a cron job for this ask.
+First call, no approval: `list_events` with no arguments. That reads the next 7 days. Under plugins.isolation: host that same call still returns the events and does not record uids. Do not pass start or end unless the user named two UTC times. Do not create a cron job for this ask.
 
 If the reply is not ok, do what next_step says once. Do not ask the user to rephrase, and do not invent a uid.
 

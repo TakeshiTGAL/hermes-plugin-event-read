@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.4
+
+The profile name on a printed `hermes cron` line comes from `ctx.profile_name` at register, which Hermes has published since 0.21.6. The plugin does not import `hermes_cli.profiles`. Under `plugins.isolation: host`, a no-argument `list_events` still returns the next 7 days and does not record uids.
+
 ## 0.1.3
 
 list_events and read_event do not register a hook and do not ask for approval. The watch still reads the public cron mark, and the seen-uid file is still not an approve line.
