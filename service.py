@@ -44,8 +44,11 @@ _PROFILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 READ_ERROR = "The calendar could not be read. The seen uids were not changed."
 CANNOT_MONITOR = "This process cannot monitor the calendar. The seen uids were not changed."
 DID_NOT_UPDATE = "This call did not update the seen uids."
-LIST_ARGS = "list_events takes a start and an end together, or no arguments. The seen uids were not changed."
-READ_ARGS = "read_event takes one uid. The seen uids were not changed."
+LIST_ARGS = (
+    "list_events takes a start and an end together, or no arguments, "
+    "written like 20261009T000000Z, and the seen uids were not changed."
+)
+READ_ARGS = "read_event takes one uid such as meet-1, and the seen uids were not changed."
 NEED_ENV = "CALDAV_URL, CALDAV_USER, and CALDAV_PASSWORD must be set."
 NOT_FOUND = "No event with that uid."
 FIRST_RECORD = "Recorded the current event uids. Nothing was announced."
@@ -129,6 +132,7 @@ def _result(
     notify: bool = False,
     message: str,
     next_step: str,
+    error_type: str | None = None,
 ) -> str:
     body = {
         "ok": ok,
@@ -141,18 +145,22 @@ def _result(
         "message": _scrub(message, deps.password),
         "next_step": _scrub(next_step, deps.password),
     }
+    if error_type:
+        body["error_type"] = error_type
     return dumps(body)
 
 
 def _load_cron_flag() -> bool:
-    module = importlib.import_module("tools.approval_context")
-    fn = getattr(module, "_is_cron_approval_context", None)
+    """True on a cron run, False when the public mark is absent.
+
+    ``cron.execution_identity.current_cron_execution`` is the published mark
+    (Hermes 0.21.6). A missing or raising helper is not a manual turn.
+    """
+    module = importlib.import_module("cron.execution_identity")
+    fn = getattr(module, "current_cron_execution", None)
     if not callable(fn):
         raise LookupError("cron check is missing")
-    value = fn()
-    if not isinstance(value, bool):
-        raise LookupError("cron check did not return a bool")
-    return value
+    return fn() is not None
 
 
 def judge_cron() -> bool | None:
@@ -239,7 +247,9 @@ def _bad_config(deps: Deps, message: str) -> str:
         error="bad_config",
         notify=True,
         message=message,
-        next_step="Set CALDAV_URL, CALDAV_USER, and CALDAV_PASSWORD. Nothing was requested.",
+        next_step=(
+            "Set CALDAV_URL, CALDAV_USER, and CALDAV_PASSWORD, then call list_events with no arguments. " "日本語: 3つを設定して、引数なしの list_events を呼ぶ。"
+        ),
     )
 
 
@@ -248,6 +258,7 @@ def _bad_args(deps: Deps, message: str) -> str:
         deps,
         ok=False,
         error="bad_args",
+        error_type="bad_args",
         notify=True,
         message=message,
         next_step="Fix the arguments. Nothing was requested and the saved uids were not changed.",
@@ -500,6 +511,43 @@ def _read_message(deps: Deps, events: list[dict[str, Any]], *, cron: bool, trunc
     return text
 
 
+_STAMP_SPLIT = re.compile(
+    r"^(\d{4})([./-])(\d{2})\2(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})[Zz]$"
+)
+_STAMP_WIDTH = str.maketrans({
+    "０": "0", "１": "1", "２": "2", "３": "3", "４": "4",
+    "５": "5", "６": "6", "７": "7", "８": "8", "９": "9",
+    "／": "/", "．": ".", "－": "-",
+    "Ｔ": "T", "ｔ": "t", "Ｚ": "Z", "ｚ": "z", "：": ":",
+})
+
+
+def _compact_stamp(text: str) -> str | None:
+    if len(text) != 16 or text[8] not in "tT" or text[-1] not in "zZ":
+        return None
+    if not (text[:8].isdigit() and text[9:15].isdigit()):
+        return None
+    return text[:8] + "T" + text[9:15] + "Z"
+
+
+def normalize_stamp(value: Any) -> str | None:
+    """Turn a slash, dot, or hyphen date into YYYYMMDDTHHMMSSZ. Never roll an invalid day."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip().translate(_STAMP_WIDTH)
+    compact = _compact_stamp(text)
+    if compact is not None and valid_stamp(compact):
+        return compact
+    match = _STAMP_SPLIT.fullmatch(text)
+    if match is None:
+        return None
+    year, month, day, hour, minute, second = match.group(1, 3, 4, 5, 6, 7)
+    compact = f"{year}{month}{day}T{hour}{minute}{second}Z"
+    if valid_stamp(compact):
+        return compact
+    return None
+
+
 def list_events(deps: Deps, args: dict[str, Any] | None) -> str:
     if not isinstance(args, dict):
         return _bad_args(deps, LIST_ARGS)
@@ -508,12 +556,12 @@ def list_events(deps: Deps, args: dict[str, Any] | None) -> str:
     ranged = "start" in args or "end" in args
     if ranged and ("start" not in args or "end" not in args):
         return _bad_args(deps, LIST_ARGS)
-    if ranged and (
-        not valid_stamp(args.get("start"))
-        or not valid_stamp(args.get("end"))
-        or args["end"] <= args["start"]
-    ):
-        return _bad_args(deps, LIST_ARGS)
+    start_stamp = end_stamp = ""
+    if ranged:
+        start_stamp = normalize_stamp(args.get("start")) or ""
+        end_stamp = normalize_stamp(args.get("end")) or ""
+        if not start_stamp or not end_stamp or end_stamp <= start_stamp:
+            return _bad_args(deps, LIST_ARGS)
     cron_flag: bool | None = False
     directory: Path | None = None
     if not ranged:
@@ -569,7 +617,7 @@ def list_events(deps: Deps, args: dict[str, Any] | None) -> str:
                 f"Point CALDAV_URL back, or delete the saved file to start again. {QUIET_NOTE}",
             )
     if ranged:
-        body = list_body(str(args["start"]), str(args["end"]))
+        body = list_body(start_stamp, end_stamp)
     else:
         start, end = _window(deps)
         body = list_body(start, end)
@@ -595,7 +643,9 @@ def list_events(deps: Deps, args: dict[str, Any] | None) -> str:
             error=kind,
             notify=cron_turn,
             message=message,
-            next_step="Nothing was recorded.",
+            next_step=(
+                "Check that CALDAV_URL answers, then call list_events with no arguments once. " "日本語: 届くか確かめて、引数なしの list_events をもう一度呼ぶ。"
+            ),
         )
     assert events is not None
     if len(events) > CAP:
@@ -675,7 +725,9 @@ def read_event(deps: Deps, args: dict[str, Any] | None) -> str:
             error="not_found",
             notify=cron_turn,
             message=message,
-            next_step="Nothing was recorded.",
+            next_step=(
+                "Call list_events with no arguments and pass one uid from that list to read_event. " "日本語: list_events が返した uid を read_event に渡す。"
+            ),
         )
     if len(matched) > 1:
         message = "More than one event has that uid, so none was chosen. The seen uids were not changed."

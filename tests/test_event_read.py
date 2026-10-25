@@ -105,17 +105,26 @@ def _notices(tmp_path: Path) -> Path:
 
 def test_register_surface_and_no_write_methods():
     tree = ast.parse((ROOT / "__init__.py").read_text(encoding="utf-8"))
-    tools, banned = [], []
+    tools, banned, hooks = [], [], []
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             if node.func.attr == "register_tool":
                 for kw in node.keywords:
                     if kw.arg == "name" and isinstance(kw.value, ast.Constant):
                         tools.append(kw.value.value)
-            if node.func.attr in {"register_command", "register_hook", "register_middleware", "register_cli_command"}:
+            if node.func.attr == "register_hook":
+                args = []
+                for arg in node.args:
+                    if isinstance(arg, ast.Constant):
+                        args.append(arg.value)
+                    elif isinstance(arg, ast.Name):
+                        args.append(arg.id)
+                hooks.append(tuple(args))
+            if node.func.attr in {"register_command", "register_middleware", "register_cli_command"}:
                 banned.append(node.func.attr)
     assert tools == ["list_events", "read_event"]
     assert banned == []
+    assert hooks == []
     for path in ROOT.glob("*.py"):
         text = path.read_text(encoding="utf-8")
         assert "request_tool_approval" not in text
@@ -719,7 +728,7 @@ def test_public_text_has_required_words_and_not_banned():
         "cron/output/",
         "no overall deadline",
         "20 s with no data",
-        "Hermes internals",
+        "current_cron_execution",
         "RECURRENCE-ID",
         "23 hours",
         "5,000",

@@ -2,7 +2,20 @@
 
 Read one CalDAV collection you run, with list_events and read_event. A cron job you create can tell you when an event uid turns up in the next week. This plugin starts no program of its own.
 
-Disclosure — sends CALDAV_USER and CALDAV_PASSWORD as Basic to your CALDAV_URL; plain http sends the password unencrypted, and redirects are not followed; it starts no local program; on every surface, including the gateway, with no user list, anyone you allow there uses your password until hermes tools turns it off; you create the watch from the CLI with hermes cron create, with no daily cap, and each run is at least one model turn; under plugins.isolation: host the watch cannot run and posts a notice saying so on every run; on a judged run, problems are sent first, on a new cause, and after 23 hours, or every run when the data directory cannot be written; a call has no overall deadline, and one request gives up after 20 s with no data; it reads unsupported Hermes internals for the cron check and the write check, so an update can stop the watch; the job remains until hermes cron remove; state lives in <HERMES_HOME>/plugin-data/event-read. Not tested against a vendor-hosted calendar.
+## First request
+
+You do not need a cron job to read the calendar. The watch is optional and comes later.
+
+1. `hermes plugins install TakeshiTGAL/hermes-plugin-event-read --enable`
+2. Set `CALDAV_URL` to the collection, such as `http://127.0.0.1:5232/user/calendar/`.
+3. Set `CALDAV_USER`.
+4. Set `CALDAV_PASSWORD`.
+5. The calendar server is already running.
+6. Ask in chat, for example "what is on my calendar this week". The model calls `list_events` with no arguments. That call does not ask for approval.
+
+Asking about the calendar is enough, and cron is not required. 日本語: 予定を聞くだけでよい。cron は要らない。モデルは引数なしの list_events を呼ぶ。
+
+Disclosure — sends CALDAV_USER and CALDAV_PASSWORD as Basic to your CALDAV_URL; plain http sends the password unencrypted, and redirects are not followed; it starts no local program; on every surface, including the gateway, with no user list, anyone you allow there uses your password until hermes tools turns it off; you create the watch from the CLI with hermes cron create, with no daily cap, and each run is at least one model turn; under plugins.isolation: host the watch cannot run and posts a notice saying so on every run; on a judged run, problems are sent first, on a new cause, and after 23 hours, or every run when the data directory cannot be written; a call has no overall deadline, and one request gives up after 20 s with no data; the cron check is cron.execution_identity.current_cron_execution (Hermes 0.21.6) and the write check is Hermes's file guard, so an update can stop the watch; the job remains until hermes cron remove; state lives in <HERMES_HOME>/plugin-data/event-read; on Hermes 0.21.6 and later its skill adds one line to the skills index of every session, even where the tools are turned off. Not tested against a vendor-hosted calendar.
 
 ## What you set
 
@@ -56,8 +69,16 @@ hermes -p work cron remove <id>
 
 `--deliver local` sends you no message: Hermes only saves the run's output under `cron/output/` in the Hermes home, for you to read later. It is the CLI default. To be told without opening that file, create the job with a target you have already configured, such as `--deliver telegram` or `--deliver telegram:<chat_id>`. `deliver` is not a tool argument and is rejected as one. There is no daily cap. Each run is at least one model turn on your bill. A turn that calls the tool makes two or more model requests. `bot-chat` costs another model turn, because the receiving agent reads the output as a message.
 
-The plugin asks for no Hermes approval. The tools are on for every surface, including the gateway, until you turn a surface off with `hermes tools`. There is no separate user list. Anyone you allow on the gateway can call the tools with your password. Under `plugins.isolation: host` the watch cannot run and posts a notice saying so on every run.
+The plugin asks for no Hermes approval. `list_events` and `read_event` only read. It does not register a `pre_tool_call` hook, so Hermes does not open a question. The seen-uid file is written only after a confirmed cron mark, and that write is not an approve line. Requires Hermes 0.21.6 or later, the first stable release with `cron.execution_identity.current_cron_execution`. The tools are on for every surface, including the gateway, until you turn a surface off with `hermes tools`. There is no separate user list. Anyone you allow on the gateway can call the tools with your password. Under `plugins.isolation: host` the watch cannot run and posts a notice saying so on every run.
 
-The cron check and the write check come from Hermes internals that are not a published interface. The data directory is the path above. If the cron check cannot be used, the watch says it cannot monitor on every run and does not send HTTP. If the write check refuses the path, the watch stops before HTTP and announces every run. If the data directory is there but cannot be written, the calendar is read, the save fails, and that failure is announced every run. None of these report an empty calendar.
+The cron check is `cron.execution_identity.current_cron_execution`, public since Hermes 0.21.6. The write check is Hermes's file guard. The data directory is the path above. If the cron check cannot be used, the watch says it cannot monitor on every run and does not send HTTP. If the write check refuses the path, the watch stops before HTTP and announces every run. If the data directory is there but cannot be written, the calendar is read, the save fails, and that failure is announced every run. None of these report an empty calendar.
+
+An empty `HERMES_HOME` scan with Hermes v0.22.2 and with origin-main is `Verdict: SAFE`, 11 findings, `Decision: ALLOWED — Allowed (community source, safe verdict)`. The findings are a password constant in the tests, git and recall subprocesses in the tests, and example collection URLs in this file and the tests. They stay, because the tests and the setup example need them.
+
+## Skill
+
+The plugin registers one skill, `caldav-calendar`. It tells the model to look up `list_events` and `read_event` with tool_search, in English, before it tries web_search. The skill runs nothing and sends nothing by itself.
+
+On Hermes 0.21.6 and later, while the plugin is enabled, the skill adds one line to the skills index of every session. That includes a surface where the tools were turned off with `hermes tools`: the line stays there, and the calls are simply unavailable. On Hermes 0.21.4 and 0.21.5 the skill is not listed; it loads only when called by its full name, `event-read:caldav-calendar`. There is no separate user list for the skill; every session that loads the plugin can read it. `hermes plugins disable event-read` removes the skill and the tools together.
 
 Not tested against a vendor-hosted calendar.

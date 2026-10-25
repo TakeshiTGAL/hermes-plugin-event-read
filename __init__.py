@@ -29,7 +29,7 @@ def register(ctx) -> None:
         schema={
             "name": "list_events",
             "description": (
-                "Read VEVENT items from the one CalDAV collection in CALDAV_URL. "
+                "CalDAV calendar: list events in one collection. "
                 "One call sends one calendar-query REPORT with Depth 1 and does not follow redirects. "
                 "With no arguments the window is the next 7 days on this plugin's UTC clock, "
                 "start included and end excluded. Pass start and end together as YYYYMMDDTHHMMSSZ, "
@@ -40,7 +40,8 @@ def register(ctx) -> None:
                 "and a saved uid is not announced again. When the run cannot be judged as cron, "
                 "a no-argument call says it cannot monitor and does not change the saved uids. "
                 "A manual call does not change them. This tool does not create, edit, or delete events, "
-                "and it does not take a delivery target."
+                "and it does not take a delivery target. "
+                'Each row is one iCalendar VEVENT, for a request such as "my calendar appointments".'
             ),
             "parameters": {
                 "type": "object",
@@ -64,12 +65,14 @@ def register(ctx) -> None:
         schema={
             "name": "read_event",
             "description": (
-                "Read one VEVENT by uid from the same CalDAV collection. "
+                "CalDAV calendar: read one event by its uid. "
                 "The uid is a property filter on one calendar-query REPORT, not a path. "
                 "A CalDAV text match is a substring match, so the exact uid is picked out of "
                 "whatever came back and a uid that merely contains it is not returned. "
                 "No event with that uid is not an empty success. "
-                "This read does not change the saved uids and does not create, edit, or delete events."
+                "This read does not change the saved uids and does not create, edit, or delete events. "
+                "With list_events it answers what is on my agenda today, this week's schedule, upcoming appointments, "
+                "or the next meeting, from a CalDAV server such as Nextcloud; only Radicale was tested."
             ),
             "parameters": {
                 "type": "object",
@@ -80,3 +83,16 @@ def register(ctx) -> None:
         },
         handler=_read,
     )
+    try:
+        from pathlib import Path
+        ctx.register_skill(
+            "caldav-calendar",
+            Path(__file__).resolve().parent / "skills" / "caldav-calendar" / "SKILL.md",
+            description=(
+                "CalDAV calendar events and appointments. "
+                "Before web_search, use tool_search to find the calendar tools and tool_call to run them."
+            ),
+        )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("event-read skill was not registered", exc_info=True)
